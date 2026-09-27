@@ -1,8 +1,10 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import ParcelDetails from "./ParcelDetails";
 import ManageParcel from "./ManageParcel";
 import PaymentHistory from "./PaymentHistory";
 import PaymentCheckout from "./PaymentCheckout";
+import { auth } from "../../../firebase";
+import { isPaidParcel } from "../../../Hok/ClientStore";
 
 const TAB_KEY = "zap_deliveries_tab";
 
@@ -24,7 +26,8 @@ const AllDeliveries = ({ parcels = [], riderFilter = null, onEdit, onPaymentSucc
   };
 
   const handlePaymentSuccess = (paymentInfo) => {
-    // Record the payment, then automatically show the updated Payment History.
+    // Record the payment, then show the Payment History tab so the saved
+    // payment details are immediately visible in the history table.
     onPaymentSuccess?.(paymentInfo);
     setPayingParcel(null);
     setActiveTab("payment");
@@ -63,11 +66,10 @@ const AllDeliveries = ({ parcels = [], riderFilter = null, onEdit, onPaymentSucc
       discount: p.discount ? `৳ ${p.discount}` : (p.amount?.discount || "৳ 0"),
     },
     amountText: "",
-    payment: p.paymentStatus || (p.paid ? "Paid" : "Unpaid"),
-    paymentColor:
-      (p.paymentStatus === "Paid" || p.paid)
-        ? "text-emerald-600"
-        : "text-amber-500",
+    payment: isPaidParcel(p) ? "Paid" : p.paymentStatus || "Unpaid",
+    paymentColor: isPaidParcel(p)
+      ? "text-emerald-600"
+      : "text-amber-500",
     original: p,
   }));
 
@@ -92,6 +94,17 @@ const AllDeliveries = ({ parcels = [], riderFilter = null, onEdit, onPaymentSucc
     setCurrentPage(page);
   };
 
+  // Always resolve the opened parcel from the latest list so the payment
+  // status/date refresh automatically after a payment succeeds.
+  const selectedParcelObject = useMemo(() => {
+    if (!selectedParcel) return null;
+    const key = selectedParcel.trackingCode || selectedParcel._id || selectedParcel.id;
+    return (
+      parcels.find((p) => (p.trackingCode || p._id || p.id) === key) ||
+      selectedParcel
+    );
+  }, [selectedParcel, parcels]);
+
   if (payingParcel) {
     return (
       <PaymentCheckout
@@ -102,10 +115,10 @@ const AllDeliveries = ({ parcels = [], riderFilter = null, onEdit, onPaymentSucc
     );
   }
 
-  if (selectedParcel) {
+  if (selectedParcelObject) {
     return (
       <ParcelDetails
-        parcel={selectedParcel}
+        parcel={selectedParcelObject}
         onBack={() => setSelectedParcel(null)}
       />
     );
@@ -151,7 +164,14 @@ const AllDeliveries = ({ parcels = [], riderFilter = null, onEdit, onPaymentSucc
         {activeTab === "manage" ? (
           <ManageParcel parcels={parcels} onSelectParcel={setSelectedParcel} onPay={setPayingParcel} />
         ) : activeTab === "payment" ? (
-          <PaymentHistory parcels={parcels} onSelectParcel={setSelectedParcel} />
+          <PaymentHistory
+            parcels={parcels}
+            owner={{
+              uid: auth.currentUser?.uid || "",
+              email: auth.currentUser?.email || "",
+            }}
+            onSelectParcel={setSelectedParcel}
+          />
         ) : (
           <>
             {/* Title */}
@@ -275,7 +295,7 @@ const AllDeliveries = ({ parcels = [], riderFilter = null, onEdit, onPaymentSucc
                         <td className="py-4 px-4 whitespace-nowrap font-medium">
                           <div className="flex items-center gap-2">
                             <span className={row.paymentColor}>{row.payment}</span>
-                            {row.payment !== "Paid" && (
+                            {!isPaidParcel(row.original) && (
                               <button
                                 onClick={() => setPayingParcel(row.original)}
                                 className="bg-[#C0E75A] hover:bg-[#b0d84b] text-[#0B252C] font-bold px-3 py-1.5 rounded-lg text-xs transition-colors"

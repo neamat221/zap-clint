@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "zapweb-bff5f"
-  }
+    "default": "zapweb-bff5f",
+    "prod": "zapweb-bff5f"
+  },
+  "targets": {},
+  "etags": {}
 }

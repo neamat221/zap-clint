@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import UseAxiosSecure from "../../Hok/UseAxiosSecure";
-
-const STORAGE_KEY = "zap_my_parcels";
+import { auth } from "../../firebase";
+import { getParcels, scopeParcels } from "../../Hok/ClientStore";
 
 const formatDateTime = (date) => {
   const options = {
@@ -42,18 +42,22 @@ const TrackConsignment = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [parcel, setParcel] = useState(null);
 
-  const loadSearchParcels = async () => {
+  const loadSearchParcel = async (code) => {
+    // Look up only the requested tracking code — never download every parcel.
     try {
-      const { data } = await axiosecure.get("/parceals");
-      if (Array.isArray(data) && data.length > 0) return data;
+      const { data } = await axiosecure.get(`/parceals/${encodeURIComponent(code)}`);
+      if (data && !data.error) return data;
     } catch (error) {
-      console.error("Failed to fetch parcels:", error);
+      console.error("Failed to fetch tracking:", error);
     }
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    } catch {
-      return [];
-    }
+    // Offline fallback: search only the current user's cached parcels.
+    const own = scopeParcels(getParcels(), {
+      uid: auth.currentUser?.uid || "",
+      email: auth.currentUser?.email || "",
+    });
+    return own.find(
+      (p) => String(p.trackingCode || "").toUpperCase() === code
+    );
   };
 
   const handleSearch = async (e) => {
@@ -63,10 +67,7 @@ const TrackConsignment = () => {
       alert("Please enter a tracking code!");
       return;
     }
-    const allParcels = await loadSearchParcels();
-    const matched = allParcels.find(
-      (p) => p.trackingCode.toUpperCase() === code
-    );
+    const matched = await loadSearchParcel(code);
     setParcel(matched || null);
     setHasSearched(true);
   };

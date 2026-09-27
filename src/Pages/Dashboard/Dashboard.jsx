@@ -16,6 +16,7 @@ import AprovierRider from "./AprovierRider/AprovierRider";
 import RiderDetails from "./AprovierRider/RiderDetails";
 import UserManagement from "./UserManagement/UserManagement";
 import RiderDashboard from "./Rider/RiderDashboard";
+import { getParcels, mergeKeepFirst, onStoreChange, scopeParcels } from "../../Hok/ClientStore";
 
 // ==========================================
 // 1. SIDEBAR COMPONENT
@@ -659,6 +660,7 @@ const DashboardTables = ({ parcels, onEdit }) => {
                     </td>
                     <td className="py-3.5 text-right">
                       <button
+                        type="button"
                         onClick={() => onEdit?.(row.original)}
                         className="text-gray-400 hover:text-gray-600 text-[11px] font-medium"
                       >
@@ -848,6 +850,9 @@ const DashboardLayout = () => {
     }
   }, [role]);
 
+  const authUid = auth.currentUser?.uid || "";
+  const authEmail = auth.currentUser?.email || "";
+
   useEffect(() => {
     const readLocal = () => {
       try {
@@ -857,30 +862,37 @@ const DashboardLayout = () => {
       }
     };
 
-    const uid = auth.currentUser?.uid || "";
+    const isAuthed = Boolean(authUid || authEmail);
+    const owner = { uid: authUid, email: authEmail };
 
     const fetchParcels = async () => {
-      // Load cached state first so paid/parcels show immediately.
+      // Fresh reload: wait for Firebase to restore the logged-in session
+      // before showing any parcels, so another user's cached data (or all
+      // server parcels) is never flashed or cached under the wrong user.
+      if (!isAuthed) {
+        setParcels([]);
+        return;
+      }
+      // Load cached state first so parcels show immediately. Regular users are
+      // strictly scoped to their own parcels so nothing leaks.
       const cached = readLocal();
-      const cachedForUser =
-        uid && !isAdmin
-          ? cached.filter((p) => (p.userId ? p.userId === uid : true))
-          : cached;
+      const cachedForUser = !isAdmin ? scopeParcels(cached, owner) : cached;
       if (cachedForUser.length) setParcels(cachedForUser);
 
       try {
-        const { data } = await axiosecure.get("/parceals");
+        const scopeQuery = !isAdmin
+          ? `?userId=${encodeURIComponent(authUid)}&email=${encodeURIComponent(authEmail || "")}`
+          : "";
+        const { data } = await axiosecure.get(`/parceals${scopeQuery}`);
         if (Array.isArray(data)) {
-          // Backend is the source of truth. Admins see every parcel; other
-          // users only see the parcels they created (plus unsynced local ones).
-          const serverItems =
-            uid && !isAdmin
-              ? data.filter((p) => !p.userId || p.userId === uid)
-              : data;
+          // The backend filters by the same owner; the client re-scopes so a
+          // missing server filter can never leak another user's parcels.
+          const serverItems = !isAdmin ? scopeParcels(data, owner) : data;
           const byKey = (p) => String(p.trackingCode || p._id || p.id);
           const serverKeys = new Set(serverItems.map(byKey));
           const extraLocal = cachedForUser.filter((p) => !serverKeys.has(byKey(p)));
-          const merged = [...serverItems, ...extraLocal];
+          // Local store wins on conflicts so frontend-made assignments survive.
+          const merged = mergeKeepFirst(extraLocal, cachedForUser, serverItems);
           setParcels(merged);
           localStorage.setItem("zap_my_parcels", JSON.stringify(merged));
           return;
@@ -891,7 +903,22 @@ const DashboardLayout = () => {
       setParcels(cachedForUser.length ? cachedForUser : []);
     };
     fetchParcels();
-  }, [axiosecure, isAdmin]);
+  }, [axiosecure, isAdmin, authUid, authEmail]);
+
+  // Keep the dashboard views in sync with browser-store assignment changes
+  // (e.g. assigning a rider while this dashboard is mounted).
+  useEffect(() => {
+    const isAuthed = Boolean(authUid || authEmail);
+    const owner = { uid: authUid, email: authEmail };
+    return onStoreChange(() => {
+      if (!isAuthed) {
+        setParcels([]);
+        return;
+      }
+      const cached = getParcels();
+      setParcels(!isAdmin ? scopeParcels(cached, owner) : cached);
+    });
+  }, [isAdmin, authUid, authEmail]);
 
   const handleLogout = async () => {
     try {
@@ -909,19 +936,23 @@ const DashboardLayout = () => {
   };
 
   const handleEditSave = async () => {
-    const id = editingParcel?._id || editingParcel?.id;
+    const id = editingParcel?._id || editingParcel?.id || editingParcel?.trackingCode;
     const updated = { ...editingParcel, status: editStatus };
-    try {
-      if (id) await axiosecure.patch(`/parceals/${id}`, { status: editStatus });
-    } catch (error) {
-      console.error("Failed to update parcel:", error);
-    }
+    // Update locally first so the change is visible immediately, even if the
+    // backend is unreachable or slow.
     const nextParcels = parcels.map((p) =>
-      (p._id || p.id) === id ? updated : p
+      (p._id || p.id || p.trackingCode) === id ? updated : p
     );
     setParcels(nextParcels);
     localStorage.setItem("zap_my_parcels", JSON.stringify(nextParcels));
     setEditingParcel(null);
+    if (id) {
+      try {
+        await axiosecure.patch(`/parceals/${id}`, { status: editStatus });
+      } catch (error) {
+        console.error("Failed to update parcel:", error);
+      }
+    }
   };
 
   const handlePaymentSuccess = async (paymentInfo) => {
@@ -930,9 +961,23 @@ const DashboardLayout = () => {
       : (paymentInfo.parcelId || paymentInfo.trackingCode);
 
     const target = parcels.find((p) => (p.trackingCode || p._id || p.id) === parcelId);
+    const txn =
+      (typeof paymentInfo === "string" ? "" : paymentInfo.transactionId) ||
+      `TXN-${Math.floor(100000 + Math.random() * 900000)}`;
+    const method = typeof paymentInfo === "string" ? "" : (paymentInfo.method || "");
+    const account = typeof paymentInfo === "string" ? "" : (paymentInfo.account || "");
+    const paidAt = new Date().toISOString();
+    const paymentDetails = {
+      paymentStatus: "Paid",
+      paid: true,
+      paidAt,
+      paymentMethod: method,
+      transactionId: txn,
+      paymentAccount: account,
+    };
     const next = parcels.map((p) =>
       (p.trackingCode || p._id || p.id) === parcelId
-        ? { ...p, paymentStatus: "Paid", paid: true, paidAt: new Date().toISOString() }
+        ? { ...p, ...paymentDetails }
         : p
     );
     setParcels(next);
@@ -942,11 +987,7 @@ const DashboardLayout = () => {
     const id = target?._id || parcelId;
     if (id) {
       try {
-        await axiosecure.patch(`/parceals/${id}`, {
-          paymentStatus: "Paid",
-          paid: true,
-          paidAt: new Date().toISOString(),
-        });
+        await axiosecure.patch(`/parceals/${id}`, paymentDetails);
       } catch (error) {
         console.error("Failed to persist payment to backend parcel:", error);
       }
@@ -956,15 +997,17 @@ const DashboardLayout = () => {
     try {
       await axiosecure.post("/payments", {
         paymentId: `PAY-${Date.now()}`,
-        transactionId: `TXN-${Math.floor(100000 + Math.random() * 900000)}`,
+        transactionId: txn,
+        account,
         parcelId: target?._id || parcelId,
         trackingCode: target?.trackingCode || (typeof paymentInfo === "string" ? parcelId : paymentInfo.trackingCode),
-        method: typeof paymentInfo === "string" ? "" : (paymentInfo.method || ""),
+        method,
         amount: typeof paymentInfo === "string" ? (target?.deliveryCost || 0) : (paymentInfo.amount || target?.deliveryCost || 0),
         parcelName: typeof paymentInfo === "string" ? (target?.parcelName || "") : (paymentInfo.parcelName || target?.parcelName || ""),
         userId: auth.currentUser?.uid || "",
+        email: auth.currentUser?.email || "",
         status: "Paid",
-        createdAt: new Date().toISOString(),
+        createdAt: paidAt,
       });
     } catch (error) {
       console.error("Failed to record payment in payments collection:", error);
@@ -976,7 +1019,7 @@ const DashboardLayout = () => {
         ...target,
         paymentStatus: "Paid",
         paid: true,
-        paidAt: new Date().toISOString(),
+        paidAt,
       };
       try {
         await syncTracking(paidParcel, {
@@ -1067,12 +1110,14 @@ const DashboardLayout = () => {
                     </select>
                     <div className="flex justify-end gap-2">
                       <button
+                        type="button"
                         onClick={() => setEditingParcel(null)}
                         className="text-xs font-bold text-gray-400 hover:text-gray-600 border border-gray-200 px-4 py-2 rounded-xl"
                       >
                         Cancel
                       </button>
                       <button
+                        type="button"
                         onClick={handleEditSave}
                         className="text-xs font-bold text-[#0B252C] bg-[#C0E75A] hover:bg-[#b0d84b] px-4 py-2 rounded-xl"
                       >

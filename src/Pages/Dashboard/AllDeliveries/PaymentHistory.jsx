@@ -1,11 +1,12 @@
 import React, { useState } from "react";
+import { isOwnParcel, isPaidParcel } from "../../../Hok/ClientStore";
 
-const PaymentHistory = ({ parcels = [], onSelectParcel }) => {
+const PaymentHistory = ({ parcels = [], onSelectParcel, owner = {} }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const perPage = 10;
 
   const paidParcels = parcels
-    .filter((p) => (p.paymentStatus === "Paid" || p.paid))
+    .filter((p) => isPaidParcel(p) && isOwnParcel(p, owner))
     .sort((a, b) => {
       const ta = new Date(a.paidAt || a.createdAt || 0).getTime();
       const tb = new Date(b.paidAt || b.createdAt || 0).getTime();
@@ -21,6 +22,9 @@ const PaymentHistory = ({ parcels = [], onSelectParcel }) => {
     },
     trackingNumber: p.trackingCode || p._id || p.id || "N/A",
     paymentInfo: p.deliveryCost ? `৳ ${p.deliveryCost} (Paid)` : "N/A",
+    paymentMethod: p.paymentMethod || "",
+    transactionId: p.transactionId || "",
+    paymentAccount: p.paymentAccount || "",
     original: p,
   }));
 
@@ -77,6 +81,9 @@ const PaymentHistory = ({ parcels = [], onSelectParcel }) => {
     <tr><th style="width:50%">Tracking Number</th><td>${row.trackingNumber}</td></tr>
     <tr><th>Parcel Name</th><td>${row.parcelName}</td></tr>
     <tr><th>Amount Paid</th><td class="total">৳ ${cost}</td></tr>
+    <tr><th>Payment Method</th><td>${row.paymentMethod || "—"}</td></tr>
+    <tr><th>Transaction ID</th><td>${row.transactionId || "—"}</td></tr>
+    <tr><th>Payment Account</th><td>${row.paymentAccount || "—"}</td></tr>
     <tr><th>Status</th><td>Paid</td></tr>
   </table>
 
@@ -108,13 +115,14 @@ const PaymentHistory = ({ parcels = [], onSelectParcel }) => {
               <th className="py-4 px-4 font-semibold">Tracking Number</th>
               <th className="py-4 px-4 font-semibold">Payment Info</th>
               <th className="py-4 px-4 font-semibold">Paid Date</th>
+              <th className="py-4 px-4 font-semibold">Payment Details</th>
               <th className="py-4 px-4 font-semibold">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="py-10 text-center text-gray-400">
+                <td colSpan={7} className="py-10 text-center text-gray-400">
                   No payment history yet.
                 </td>
               </tr>
@@ -139,6 +147,22 @@ const PaymentHistory = ({ parcels = [], onSelectParcel }) => {
                       minute: "2-digit",
                     })
                   : "—"}
+              </td>
+              <td className="py-4 px-4 space-y-0.5 text-[11px]">
+                {row.paymentMethod && (
+                  <p className="font-semibold text-emerald-700 capitalize">
+                    {row.paymentMethod}
+                  </p>
+                )}
+                {row.transactionId && (
+                  <p className="text-gray-500">{row.transactionId}</p>
+                )}
+                {row.paymentAccount && (
+                  <p className="text-gray-400">{row.paymentAccount}</p>
+                )}
+                {!row.paymentMethod && !row.transactionId && !row.paymentAccount && (
+                  <p className="text-gray-300">—</p>
+                )}
               </td>
               <td className="py-4 px-4 whitespace-nowrap">
                     <div className="flex items-center gap-2">

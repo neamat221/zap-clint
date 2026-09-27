@@ -1,10 +1,10 @@
 import React, { useState } from "react";
-import ParcelDetails from "./ParcelDetails";
+import { isPaidParcel } from "../../../Hok/ClientStore";
 
 const ManageParcel = ({ parcels = [], onSelectParcel, onPay }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const perPage = 10;
-  const unpaidCount = parcels.filter((p) => (p.paymentStatus || "").toLowerCase() === "unpaid" || !(p.paid)).length;
+  const unpaidCount = parcels.filter((p) => !isPaidParcel(p)).length;
   const readyPickupCount = parcels.filter((p) => /ready pick up/i.test(p.status || "")).length;
   const inTransitCount = parcels.filter((p) => /transit|in transit/i.test(p.status || "")).length;
   const readyToDeliverCount = parcels.filter((p) => /ready to deliver/i.test(p.status || "")).length;
@@ -27,7 +27,7 @@ const ManageParcel = ({ parcels = [], onSelectParcel, onPay }) => {
     },
     trackingNumber: p.trackingCode || p._id || p.id || "N/A",
     paymentInfo: p.deliveryCost
-      ? `৳ ${p.deliveryCost} (${p.paymentStatus || (p.paid ? "Paid" : "Unpaid")})`
+      ? `৳ ${p.deliveryCost} (${isPaidParcel(p) ? "Paid" : p.paymentStatus || "Unpaid"})`
       : "N/A",
     original: p,
   }));
@@ -98,7 +98,7 @@ const ManageParcel = ({ parcels = [], onSelectParcel, onPay }) => {
                       >
                         View
                       </button>
-                      {!(row.original.paymentStatus === "Paid" || row.original.paid) && onPay && (
+                      {!isPaidParcel(row.original) && onPay && (
                         <button
                           onClick={() => onPay?.(row.original)}
                           className="bg-[#C0E75A] hover:bg-[#b0d84b] text-[#0B252C] font-bold px-3 py-1.5 rounded-lg text-xs transition-colors"

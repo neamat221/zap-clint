@@ -2,6 +2,15 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Swal from "sweetalert2";
 import UseAxiosSecure from "../../../Hok/UseAxiosSecure";
 import ParcelDetails from "./ParcelDetails";
+import {
+  getParcels,
+  getRiders,
+  patchParcel,
+  mergeKeepFirst,
+  onStoreChange,
+  saveParcels,
+  saveRiders,
+} from "../../../Hok/ClientStore";
 
 const rejectedIds = (parcel) =>
   Array.isArray(parcel.rejectedRiderIds) ? parcel.rejectedRiderIds : [];
@@ -30,24 +39,39 @@ const AssignRiders = ({ onViewDeliveries }) => {
     let cancelled = false;
     const fetchData = async () => {
       setLoading(true);
+      // Optional server seed (best-effort). The local store is the source of
+      // truth, so server data is appended only where the local copy is absent.
       try {
         const [parcelRes, riderRes] = await Promise.all([
-          axiosSecure.get("/parceals"),
-          axiosSecure.get("/riders"),
+          axiosSecure.get("/parceals").catch(() => null),
+          axiosSecure.get("/riders").catch(() => null),
         ]);
         if (cancelled) return;
-        setParcels(Array.isArray(parcelRes.data) ? parcelRes.data : []);
-        setRiders(Array.isArray(riderRes.data) ? riderRes.data : []);
+        if (Array.isArray(parcelRes?.data)) {
+          saveParcels(mergeKeepFirst(getParcels(), parcelRes.data));
+        }
+        if (Array.isArray(riderRes?.data)) {
+          saveRiders(mergeKeepFirst(getRiders(), riderRes.data));
+        }
       } catch (error) {
-        console.error("Failed to load assignments data:", error);
-        if (!cancelled) showToast("Failed to load data. Please try again.", "error");
+        if (!cancelled) console.error("Failed to load assignments data:", error);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setParcels(getParcels());
+          setRiders(getRiders());
+          setLoading(false);
+        }
       }
     };
     fetchData();
+    const un = onStoreChange(() => {
+      if (cancelled) return;
+      setParcels(getParcels());
+      setRiders(getRiders());
+    });
     return () => {
       cancelled = true;
+      un();
     };
   }, [axiosSecure]);
 
@@ -155,30 +179,27 @@ const AssignRiders = ({ onViewDeliveries }) => {
     }
     const rider = approvedRiders.find((r) => idOf(r) === riderId);
     setSavingId(id);
-    try {
-      const rejectedRiderIds = (
-        Array.isArray(parcel.rejectedRiderIds) ? parcel.rejectedRiderIds : []
-      ).filter((rid) => String(rid) !== String(riderId));
-      const payload = {
-        assignedRiderId: riderId,
-        assignedRiderName: rider?.name || rider?.email || "Rider",
-        assignedRiderPhone: rider?.phone || "",
-        assignedRiderEmail: rider?.email || "",
-        riderAssignedAt: new Date().toISOString(),
-        assignmentStatus: "pending",
-        rejectedRiderIds,
-      };
-      await axiosSecure.patch(`/parceals/${id}`, payload);
-      setParcels((prev) =>
-        prev.map((p) => (keyOf(p) === id ? { ...p, ...payload } : p))
+    const rejectedRiderIds = (
+      Array.isArray(parcel.rejectedRiderIds) ? parcel.rejectedRiderIds : []
+    ).filter((rid) => String(rid) !== String(riderId));
+    const payload = {
+      assignedRiderId: riderId,
+      assignedRiderName: rider?.name || rider?.email || "Rider",
+      assignedRiderPhone: rider?.phone || "",
+      assignedRiderEmail: rider?.email || "",
+      riderAssignedAt: new Date().toISOString(),
+      assignmentStatus: "pending",
+      rejectedRiderIds,
+    };
+    patchParcel(id, payload);
+    setParcels(getParcels());
+    showToast(`Assigned to ${payload.assignedRiderName}`);
+    axiosSecure
+      .patch(`/parceals/${id}`, payload)
+      .catch((error) =>
+        console.warn("Server sync (assign) skipped:", error?.message)
       );
-      showToast(`Assigned to ${payload.assignedRiderName}`);
-    } catch (error) {
-      console.error("Failed to assign rider:", error);
-      showToast("Failed to save assignment. Please try again.", "error");
-    } finally {
-      setSavingId(null);
-    }
+    setSavingId(null);
   };
 
   const handleUnassign = async (parcel) => {
@@ -200,43 +221,26 @@ const AssignRiders = ({ onViewDeliveries }) => {
     if (!result.isConfirmed) return;
 
     setSavingId(id);
-    try {
-      await axiosSecure.patch(`/parceals/${id}`, {
-        assignedRiderId: null,
-        assignedRiderName: null,
-        assignedRiderPhone: null,
-        riderAssignedAt: null,
-      });
-      setParcels((prev) =>
-        prev.map((p) =>
-          keyOf(p) === id
-            ? {
-                ...p,
-                assignedRiderId: null,
-                assignedRiderName: null,
-                assignedRiderPhone: null,
-                riderAssignedAt: null,
-              }
-            : p
-        )
+    const update = {
+      assignedRiderId: null,
+      assignedRiderName: null,
+      assignedRiderPhone: null,
+      riderAssignedAt: null,
+    };
+    patchParcel(id, update);
+    setParcels(getParcels());
+    Swal.fire({
+      icon: "success",
+      title: "Removed!",
+      text: "The rider assignment has been removed.",
+      confirmButtonColor: "#C0E75A",
+    });
+    axiosSecure
+      .patch(`/parceals/${id}`, update)
+      .catch((error) =>
+        console.warn("Server sync (unassign) skipped:", error?.message)
       );
-      Swal.fire({
-        icon: "success",
-        title: "Removed!",
-        text: "The rider assignment has been removed.",
-        confirmButtonColor: "#C0E75A",
-      });
-    } catch (error) {
-      console.error("Failed to unassign rider:", error);
-      Swal.fire({
-        icon: "error",
-        title: "Failed",
-        text: "Something went wrong. Please try again.",
-        confirmButtonColor: "#C0E75A",
-      });
-    } finally {
-      setSavingId(null);
-    }
+    setSavingId(null);
   };
 
   const handleRejectRider = async (parcel) => {
@@ -260,43 +264,25 @@ const AssignRiders = ({ onViewDeliveries }) => {
     if (!result.isConfirmed) return;
 
     setSavingId(id);
-    try {
-      const rejectedRiderIds = [
-        ...rejectedIds(parcel),
-        riderId,
-      ];
-      await axiosSecure.patch(`/parceals/${id}`, {
-        assignedRiderId: null,
-        assignedRiderName: null,
-        assignedRiderPhone: null,
-        assignedRiderEmail: null,
-        riderAssignedAt: null,
-        assignmentStatus: "rejected",
-        rejectedRiderIds,
-      });
-      setParcels((prev) =>
-        prev.map((p) =>
-          keyOf(p) === id
-            ? {
-                ...p,
-                assignedRiderId: null,
-                assignedRiderName: null,
-                assignedRiderPhone: null,
-                assignedRiderEmail: null,
-                riderAssignedAt: null,
-                assignmentStatus: "rejected",
-                rejectedRiderIds,
-              }
-            : p
-        )
+    const rejectedRiderIds = [...rejectedIds(parcel), riderId];
+    const update = {
+      assignedRiderId: null,
+      assignedRiderName: null,
+      assignedRiderPhone: null,
+      assignedRiderEmail: null,
+      riderAssignedAt: null,
+      assignmentStatus: "rejected",
+      rejectedRiderIds,
+    };
+    patchParcel(id, update);
+    setParcels(getParcels());
+    showToast(`${riderName} rejected for this parcel`);
+    axiosSecure
+      .patch(`/parceals/${id}`, update)
+      .catch((error) =>
+        console.warn("Server sync (reject rider) skipped:", error?.message)
       );
-      showToast(`${riderName} rejected for this parcel`);
-    } catch (error) {
-      console.error("Failed to reject rider:", error);
-      showToast("Failed to reject rider. Please try again.", "error");
-    } finally {
-      setSavingId(null);
-    }
+    setSavingId(null);
   };
 
   const renderRiderBadge = (parcel) => (

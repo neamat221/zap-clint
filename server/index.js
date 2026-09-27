@@ -227,12 +227,18 @@ app.delete("/riders/:id", async (req, res) => {
 // ------------------------------------------------------------
 app.get("/parceals", async (req, res) => {
   try {
-    const { riderEmail, riderId } = req.query;
+    const { riderEmail, riderId, userId, email } = req.query;
     let filter = {};
     if (riderEmail) {
       filter.assignedRiderEmail = decodeURIComponent(String(riderEmail));
     } else if (riderId) {
       filter.assignedRiderId = String(riderId);
+    } else if (userId || email) {
+      // Owner-scoped query: only return parcels belonging to this user.
+      const or = [];
+      if (userId) or.push({ userId: String(userId) });
+      if (email) or.push({ senderEmail: decodeURIComponent(String(email)) });
+      filter.$or = or;
     }
     const parcels = await col("parceals")
       .find(filter)
@@ -405,7 +411,20 @@ app.delete("/trackings/:id", async (req, res) => {
 // ------------------------------------------------------------
 app.get("/payments", async (req, res) => {
   try {
-    const payments = await col("payments").find().sort({ createdAt: -1 }).toArray();
+    const { userId, email } = req.query;
+    // Payment history must always be owner-scoped. Without an explicit
+    // userId/email no records are returned, so one user can never read
+    // another user's payment history.
+    if (!userId && !email) {
+      return res.json([]);
+    }
+    const or = [];
+    if (userId) or.push({ userId: String(userId) });
+    if (email) or.push({ email: decodeURIComponent(String(email)) });
+    const payments = await col("payments")
+      .find({ $or: or })
+      .sort({ createdAt: -1 })
+      .toArray();
     res.json(payments);
   } catch (error) {
     res.status(500).json({ error: error.message });

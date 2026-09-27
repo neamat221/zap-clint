@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import UseAxiosSecure from "../../../Hok/UseAxiosSecure";
 import ParcelDetails from "./ParcelDetails";
+import { getParcels, getRiders, isPaidParcel, onStoreChange } from "../../../Hok/ClientStore";
 
 const perPage = 10;
 
 const Deliveries = ({ onBack, onSelectRider }) => {
-  const axiosSecure = UseAxiosSecure();
   const [riders, setRiders] = useState([]);
   const [parcels, setParcels] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -15,27 +14,19 @@ const Deliveries = ({ onBack, onSelectRider }) => {
 
   useEffect(() => {
     let cancelled = false;
-    const fetchData = async () => {
-      setLoading(true);
-      try {
-        const [riderRes, parcelRes] = await Promise.all([
-          axiosSecure.get("/riders"),
-          axiosSecure.get("/parceals"),
-        ]);
-        if (cancelled) return;
-        setRiders(Array.isArray(riderRes.data) ? riderRes.data : []);
-        setParcels(Array.isArray(parcelRes.data) ? parcelRes.data : []);
-      } catch (error) {
-        console.error("Failed to load rider deliveries:", error);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+    const refresh = () => {
+      if (cancelled) return;
+      setRiders(getRiders());
+      setParcels(getParcels());
+      setLoading(false);
     };
-    fetchData();
+    refresh();
+    const un = onStoreChange(refresh);
     return () => {
       cancelled = true;
+      un();
     };
-  }, [axiosSecure]);
+  }, []);
 
   const approvedRiders = useMemo(
     () =>
@@ -272,12 +263,12 @@ const Deliveries = ({ onBack, onSelectRider }) => {
                           <td className="py-3 px-4 whitespace-nowrap font-medium">
                             <span
                               className={
-                                p.paymentStatus === "Paid" || p.paid
+                                isPaidParcel(p)
                                   ? "text-emerald-600"
                                   : "text-amber-500"
                               }
                             >
-                              {p.paymentStatus === "Paid" || p.paid
+                              {isPaidParcel(p)
                                 ? "Paid"
                                 : "Unpaid"}
                             </span>

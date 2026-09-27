@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { GoogleAuthProvider, signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
 import { auth } from "../../firebase";
 import useAxiosSecure from "../../Hok/UseAxiosSecure";
 import logo from "../../assets/logo.png";
@@ -15,6 +15,14 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
   const axiosSecure = useAxiosSecure();
+
+  // Already logged in? Skip the login page and go straight to the dashboard.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) navigate("/dashboard", { replace: true });
+    });
+    return unsubscribe;
+  }, [navigate]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;

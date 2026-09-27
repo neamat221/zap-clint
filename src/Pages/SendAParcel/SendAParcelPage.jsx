@@ -1,18 +1,24 @@
 import React, { useEffect, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
 import SendAParcelForm from "./SendAParcel";
 import MyParcels from "./MyParcels";
 import PriceCalcForm from "../PricingCalculator/PriceCalcForm";
 import TrackConsignment from "../TrackConsignment/TrackConsignment";
 import UseAxiosSecure from "../../Hok/UseAxiosSecure";
 import { auth } from "../../firebase";
+import {
+  getParcels,
+  keyOf,
+  mergeKeepFirst,
+  saveParcels,
+  scopeParcels,
+} from "../../Hok/ClientStore";
 
 const tabs = [
   { id: "send", label: "Send A Parcel" },
   { id: "my", label: "My Parcels" },
   { id: "track", label: "Track Consignment" },
 ];
-
-const STORAGE_KEY = "zap_my_parcels";
 
 const generateTrackingCode = () => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -28,40 +34,50 @@ const SendAParcelPage = () => {
   const [activeTab, setActiveTab] = useState("send");
   const [activeView, setActiveView] = useState("form");
   const [draft, setDraft] = useState(null);
-  const [parcels, setParcels] = useState([]);
+  // Tracks the restored session so a page refresh keeps showing THIS user's
+  // parcels (no stale/foreign data).
+  const [authUser, setAuthUser] = useState(() => auth.currentUser);
+  const authUid = authUser?.uid || "";
+  const authEmail = authUser?.email || "";
+  const [parcels, setParcels] = useState(() => []);
+
+  useEffect(() => onAuthStateChanged(auth, setAuthUser), []);
+
+  const owner = () => ({ uid: authUid, email: authEmail });
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid || "";
     const fetchParcels = async () => {
+      // Fresh reload: wait for Firebase to restore the logged-in session
+      // before requesting or rendering anything, so another user's data is
+      // never fetched or displayed.
+      if (!authUid && !authEmail) {
+        setParcels([]);
+        return;
+      }
+      const currentOwner = { uid: authUid, email: authEmail };
+      // Only this user's cached parcels, shown immediately.
+      setParcels(scopeParcels(getParcels(), currentOwner));
       try {
-        const { data } = await axiosecure.get("/parceals");
+        const { data } = await axiosecure.get(
+          `/parceals?userId=${encodeURIComponent(
+            authUid
+          )}&email=${encodeURIComponent(authEmail)}`
+        );
         if (Array.isArray(data)) {
-          const scoped = uid ? data.filter((p) => !p.userId || p.userId === uid) : data;
-          setParcels(scoped);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(scoped));
-          return;
+          // Merge this user's server parcels into the shared store (never
+          // overwrite other users' cached data), then re-scope the view.
+          const scoped = scopeParcels(data, currentOwner);
+          saveParcels(mergeKeepFirst(getParcels(), scoped));
+          setParcels(scopeParcels(getParcels(), currentOwner));
         }
       } catch (error) {
         console.error("Failed to fetch parcels:", error);
       }
-      try {
-        const cached = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-        const scoped = uid ? cached.filter((p) => !p.userId || p.userId === uid) : cached;
-        setParcels(scoped);
-      } catch {
-        setParcels([]);
-      }
     };
     fetchParcels();
-  }, [axiosecure]);
+  }, [axiosecure, authUid, authEmail]);
 
   const handleParcelCreated = async (parcel) => {
-    const saveLocal = (nextParcels) => {
-      setParcels(nextParcels);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextParcels));
-      setActiveTab("my");
-    };
-
     const saved = { ...parcel };
     try {
       const { data } = await axiosecure.post("/parceals", parcel);
@@ -72,7 +88,9 @@ const SendAParcelPage = () => {
       console.error("Failed to create parcel:", error);
       alert("Booking saved locally. Could not sync with server!");
     }
-    saveLocal([saved, ...parcels]);
+    saveParcels(mergeKeepFirst(getParcels(), [saved]));
+    setParcels(scopeParcels(getParcels(), owner()));
+    setActiveTab("my");
   };
 
   const handleParcelRemove = async (parcel) => {
@@ -82,11 +100,11 @@ const SendAParcelPage = () => {
     } catch (error) {
       console.error("Failed to delete parcel:", error);
     }
-    const nextParcels = parcels.filter(
-      (p) => (p._id || p.id) !== id
+    const removedKey = String(id || parcel.trackingCode || "");
+    saveParcels(
+      getParcels().filter((p) => keyOf(p) !== removedKey)
     );
-    setParcels(nextParcels);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextParcels));
+    setParcels(scopeParcels(getParcels(), owner()));
   };
 
   const renderTab = () => {
@@ -110,6 +128,7 @@ const SendAParcelPage = () => {
                   id: Date.now(),
                   trackingCode: generateTrackingCode(),
                   userId: auth.currentUser?.uid || "",
+                  senderEmail: auth.currentUser?.email || "",
                   ...draft,
                   parcelType:
                     draft.parcelType === "document" ? "document" : "non-document",

@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { isPaidParcel } from "../../../Hok/ClientStore";
 
 const useHandleAssignedRider = (axiosSecure, rider = {}) => {
   const riderId = rider?._id || rider?.id;
@@ -8,8 +9,7 @@ const useHandleAssignedRider = (axiosSecure, rider = {}) => {
       const trackingCode = parcel?._id || parcel?.id || parcel?.trackingCode;
       if (!trackingCode) return null;
 
-      const isPaid =
-        parcel?.paymentStatus === "Paid" || parcel?.paid === true;
+      const isPaid = isPaidParcel(parcel);
 
       const payload = {
         trackingCode,

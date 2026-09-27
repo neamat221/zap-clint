@@ -4,13 +4,22 @@ import UseAxiosSecure from "../../../Hok/UseAxiosSecure";
 import useHandleAssignedRider from "./HandelAssineRider";
 import { auth } from "../../../firebase";
 import ParcelDetails from "../AllDeliveries/ParcelDetails";
+import {
+  getParcels,
+  getRiders,
+  patchParcel,
+  onStoreChange,
+  saveParcels,
+  saveRiders,
+  mergeKeepFirst,
+} from "../../../Hok/ClientStore";
 
 const RiderDashboard = ({ forAdmin = false }) => {
   const axiosSecure = UseAxiosSecure();
   const { syncTracking } = useHandleAssignedRider(axiosSecure);
-  const [parcels, setParcels] = useState([]);
-  const [riders, setRiders] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [parcels, setParcels] = useState(() => getParcels());
+  const [riders, setRiders] = useState(() => getRiders());
+  const [loading] = useState(false);
   const [savingId, setSavingId] = useState(null);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("pending");
@@ -54,33 +63,42 @@ const RiderDashboard = ({ forAdmin = false }) => {
 
   useEffect(() => {
     let cancelled = false;
-    const fetchData = async (showLoader = true) => {
-      if (showLoader) setLoading(true);
+    // Read from the browser store so assignments made via "Assign Riders"
+    // appear instantly (same tab) or via the storage event (other tabs).
+    const refreshLocal = () => {
+      if (cancelled) return;
+      setParcels(getParcels());
+      setRiders(getRiders());
+    };
+    // Best-effort server seed (ignored when the API is offline).
+    (async () => {
       try {
         const parcelUrl = forAdmin
           ? "/parceals"
           : `/parceals?riderEmail=${encodeURIComponent(userEmail)}`;
         const [parcelRes, riderRes] = await Promise.all([
-          axiosSecure.get(parcelUrl),
-          axiosSecure.get("/riders"),
+          axiosSecure.get(parcelUrl).catch(() => null),
+          axiosSecure.get("/riders").catch(() => null),
         ]);
         if (cancelled) return;
-        setParcels(Array.isArray(parcelRes.data) ? parcelRes.data : []);
-        setRiders(Array.isArray(riderRes.data) ? riderRes.data : []);
-      } catch (error) {
-        console.error("Failed to load rider deliveries:", error);
-      } finally {
-        if (!cancelled && showLoader) setLoading(false);
+        if (Array.isArray(parcelRes?.data) && parcelRes.data.length) {
+          saveParcels(mergeKeepFirst(getParcels(), parcelRes.data));
+        }
+        if (Array.isArray(riderRes?.data) && riderRes.data.length) {
+          saveRiders(mergeKeepFirst(getRiders(), riderRes.data));
+        }
+        refreshLocal();
+      } catch {
+        // offline — local store already rendered
       }
-    };
-    fetchData();
-    const onFocus = () => fetchData(false);
-    const interval = window.setInterval(() => fetchData(false), 15000);
+    })();
+    const onFocus = () => refreshLocal();
+    const un = onStoreChange(refreshLocal);
     window.addEventListener("focus", onFocus);
     return () => {
       cancelled = true;
+      un();
       window.removeEventListener("focus", onFocus);
-      window.clearInterval(interval);
     };
   }, [axiosSecure, forAdmin, userEmail]);
 
@@ -141,7 +159,7 @@ const RiderDashboard = ({ forAdmin = false }) => {
     setSavingId(id);
     try {
       const acceptedAt = new Date().toISOString();
-      await axiosSecure.patch(`/parceals/${id}`, {
+      patchParcel(id, {
         assignmentStatus: "accepted",
         riderAcceptedAt: acceptedAt,
       });
@@ -150,16 +168,20 @@ const RiderDashboard = ({ forAdmin = false }) => {
         assignmentStatus: "accepted",
         riderAcceptedAt: acceptedAt,
       };
-      setParcels((prev) =>
-        prev.map((p) =>
-          (p._id || p.id || p.trackingCode) === id ? updatedParcel : p
-        )
-      );
+      setParcels(getParcels());
+      axiosSecure
+        .patch(`/parceals/${id}`, {
+          assignmentStatus: "accepted",
+          riderAcceptedAt: acceptedAt,
+        })
+        .catch((error) =>
+          console.warn("Server sync (accept) skipped:", error?.message)
+        );
       await syncTracking(updatedParcel, {
         type: "assignment",
         assignmentStatus: "accepted",
         message: "Rider accepted the delivery.",
-      });
+      }).catch(() => null);
       Swal.fire({
         icon: "success",
         title: "Delivery Accepted!",
@@ -198,22 +220,12 @@ const RiderDashboard = ({ forAdmin = false }) => {
     setSavingId(id);
     try {
       const rejectedRiderIds = Array.isArray(parcel.rejectedRiderIds)
-        ? parcel.rejectedRiderIds
+        ? [...parcel.rejectedRiderIds]
         : [];
       if (riderId && !rejectedRiderIds.includes(riderId)) {
         rejectedRiderIds.push(riderId);
       }
-      await axiosSecure.patch(`/parceals/${id}`, {
-        assignedRiderId: null,
-        assignedRiderName: null,
-        assignedRiderPhone: null,
-        assignedRiderEmail: null,
-        riderAssignedAt: null,
-        assignmentStatus: "rejected",
-        rejectedRiderIds,
-      });
-      const updatedParcel = {
-        ...parcel,
+      const update = {
         assignedRiderId: null,
         assignedRiderName: null,
         assignedRiderPhone: null,
@@ -222,16 +234,19 @@ const RiderDashboard = ({ forAdmin = false }) => {
         assignmentStatus: "rejected",
         rejectedRiderIds,
       };
-      setParcels((prev) =>
-        prev.map((p) =>
-          (p._id || p.id || p.trackingCode) === id ? updatedParcel : p
-        )
-      );
+      patchParcel(id, update);
+      const updatedParcel = { ...parcel, ...update };
+      setParcels(getParcels());
+      axiosSecure
+        .patch(`/parceals/${id}`, update)
+        .catch((error) =>
+          console.warn("Server sync (reject) skipped:", error?.message)
+        );
       await syncTracking(updatedParcel, {
         type: "assignment",
         assignmentStatus: "rejected",
         message: "Rider rejected the delivery.",
-      });
+      }).catch(() => null);
       Swal.fire({
         icon: "success",
         title: "Delivery Rejected",

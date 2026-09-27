@@ -4,7 +4,8 @@ import { auth } from "../firebase";
 import { useNavigate } from "react-router";
 
 const axiosecure = axios.create({
-  baseURL: "http://localhost:3000",
+  baseURL: "https://zap-server-xi.vercel.app",
+  timeout: 10000,
 });
 
 const UseAxiosSecure = () => {
@@ -19,7 +20,7 @@ const UseAxiosSecure = () => {
           config.headers.Authorization = `Bearer ${token}`;
         }
         return config;
-      }
+      },
     );
 
     const responseInterceptor = axiosecure.interceptors.response.use(
@@ -30,7 +31,7 @@ const UseAxiosSecure = () => {
           navigate("/login");
         }
         return Promise.reject(error);
-      }
+      },
     );
 
     return () => {

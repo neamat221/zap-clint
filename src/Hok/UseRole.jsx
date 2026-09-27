@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../firebase";
 import UseAxiosSecure from "./UseAxiosSecure";
+import { getCurrentUser, getRiders } from "./ClientStore";
 
 const UseRole = () => {
   const axiosSecure = UseAxiosSecure();
@@ -26,14 +27,19 @@ const UseRole = () => {
           const riderList = Array.isArray(ridersRes?.data)
             ? ridersRes.data
             : [];
-          const approvedRider = riderList.find(
+          // Fall back to the browser store when the API is unreachable so the
+          // assign-rider flow still works purely on the frontend.
+          const fallbackUser = getCurrentUser();
+          const fallbackRiders = getRiders();
+          const approvedFrom = riderList.length ? riderList : fallbackRiders;
+          const approvedRider = approvedFrom.find(
             (r) =>
               ["approved", "accepted"].includes(
                 String(r.status || "").toLowerCase()
               ) &&
               String(r.email || "").toLowerCase() === email.toLowerCase()
           );
-          const userRole = data?.role || "";
+          const userRole = data?.role || fallbackUser?.role || "";
           setRole(
             String(userRole).toLowerCase() === "admin"
               ? userRole

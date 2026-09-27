@@ -19,18 +19,24 @@ const PaymentCheckout = ({ parcel, onBack, onPaymentSuccess }) => {
     cvv: "",
   });
   const [bkashError, setBkashError] = useState("");
+  const [transactionId, setTransactionId] = useState("");
 
   const amount = parcel?.deliveryCost || parcel?.amount?.cod || 0;
   const parcelName = parcel?.parcelName || parcel?.title || "Parcel";
   const trackingCode = parcel?.trackingCode || parcel?._id || parcel?.id || "N/A";
 
   const completePayment = () => {
+    const txn =
+      transactionId || `TXN-${Math.floor(100000 + Math.random() * 900000)}`;
+    setTransactionId(txn);
     onPaymentSuccess?.({
       trackingCode,
       method: paymentMethod,
       amount: Number(amount) || 0,
       parcelId: parcel?._id || parcel?.id || trackingCode,
       parcelName,
+      transactionId: txn,
+      account: paymentMethod === "bkash" ? bkashNumber : "",
     });
   };
 
@@ -84,6 +90,7 @@ const PaymentCheckout = ({ parcel, onBack, onPaymentSuccess }) => {
     setBkashError("");
     setStripeError("");
     setCardDetails({ number: "", name: "", expiry: "", cvv: "" });
+    setTransactionId("");
   };
 
   const switchMethod = (m) => {
@@ -304,7 +311,7 @@ const PaymentCheckout = ({ parcel, onBack, onPaymentSuccess }) => {
             </div>
             <div>
               <h3 className="text-lg font-bold text-[#0B252C]">Payment Successful!</h3>
-              <p className="text-xs text-gray-400 mt-1">Transaction ID: TXN-{Math.floor(100000 + Math.random() * 900000)}</p>
+              <p className="text-xs text-gray-400 mt-1">Transaction ID: {transactionId}</p>
             </div>
             <button
               onClick={onBack || resetForm}
